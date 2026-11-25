@@ -74,6 +74,7 @@ import kotlinx.coroutines.launch
 fun HomeScreen(
     cards: List<CardEntity>,
     transactionsByCard: Map<String, List<TransactionEntity>>,
+    isCardsLoaded: Boolean,
     onOpenDetail: (String) -> Unit,
     onOpenScan: () -> Unit,
     onEditCardLabel: (CardEntity) -> Unit,
@@ -86,6 +87,9 @@ fun HomeScreen(
             .background(TapBgPrimary)
             .statusBarsPadding()
     ) {
+        if (!isCardsLoaded) {
+            return@Column
+        }
         if (cards.isEmpty()) {
             EmptyWalletState(onOpenScan = onOpenScan)
             return@Column

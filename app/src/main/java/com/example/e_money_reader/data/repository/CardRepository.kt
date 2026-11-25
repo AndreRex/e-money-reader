@@ -7,10 +7,14 @@ import com.example.e_money_reader.data.local.TransactionEntity
 import com.example.e_money_reader.data.local.TransactionSource
 import com.example.e_money_reader.nfc.ParsedCardData
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class CardRepository(
     private val dao: TapSaldoDao
 ) {
+    private val writeMutex = Mutex()
+
     fun observeCards(): Flow<List<CardEntity>> = dao.observeCards()
 
     fun observeTransactions(cardUid: String): Flow<List<TransactionEntity>> =
@@ -19,7 +23,7 @@ class CardRepository(
     suspend fun saveScannedCard(
         data: ParsedCardData,
         nowMillis: Long = System.currentTimeMillis()
-    ): CardEntity {
+    ): CardEntity = writeMutex.withLock {
         val existingCard = dao.getCardByUid(data.uid)
         val allCards = dao.getAllCards()
         val shouldBeActive = existingCard?.isActive ?: allCards.none { it.isActive }
@@ -34,17 +38,17 @@ class CardRepository(
             lastScannedAt = nowMillis,
             isActive = shouldBeActive
         )
-        dao.upsertCard(updatedCard)
 
-        mergeTransactions(existingCard, data, nowMillis)
-        return updatedCard
+        val newTransactions = buildMergedTransactions(existingCard, data, nowMillis)
+        dao.saveCardWithTransactions(updatedCard, newTransactions)
+        updatedCard
     }
 
-    private suspend fun mergeTransactions(
+    private suspend fun buildMergedTransactions(
         existingCard: CardEntity?,
         data: ParsedCardData,
         nowMillis: Long
-    ) {
+    ): List<TransactionEntity> {
         val existingKeys = dao.getTransactionsForCard(data.uid).map { it.dedupKey }.toHashSet()
         var nextSequence = dao.getMaxSequenceNumber(data.uid)
 
@@ -66,35 +70,35 @@ class CardRepository(
                     )
                 }
             }
-            if (newEntities.isNotEmpty()) {
-                dao.insertTransactionsIgnore(newEntities)
-            }
-        } else if (existingCard != null && data.balance != existingCard.lastBalance) {
+            return newEntities
+        } else if (!data.chipLogReadFailed && existingCard != null && data.balance != existingCard.lastBalance) {
             val delta = data.balance - existingCard.lastBalance
             nextSequence += 1
-            val deltaEntity = TransactionEntity(
-                cardUid = data.uid,
-                dedupKey = "DELTA-${existingCard.lastBalance}->${data.balance}@$nowMillis",
-                sequenceNumber = nextSequence,
-                customTitle = null,
-                amount = delta,
-                balanceAfter = data.balance,
-                category = defaultCategoryForAmount(delta),
-                timestamp = nowMillis,
-                source = TransactionSource.BALANCE_DELTA
+            return listOf(
+                TransactionEntity(
+                    cardUid = data.uid,
+                    dedupKey = "DELTA-${existingCard.lastBalance}->${data.balance}@$nowMillis",
+                    sequenceNumber = nextSequence,
+                    customTitle = null,
+                    amount = delta,
+                    balanceAfter = data.balance,
+                    category = defaultCategoryForAmount(delta),
+                    timestamp = nowMillis,
+                    source = TransactionSource.BALANCE_DELTA
+                )
             )
-            dao.insertTransactionsIgnore(listOf(deltaEntity))
         }
+        return emptyList()
     }
 
     private fun defaultCategoryForAmount(amount: Long): TransactionCategory =
         if (amount > 0L) TransactionCategory.TOPUP else TransactionCategory.OTHER
 
-    suspend fun setActiveCard(uid: String) {
+    suspend fun setActiveCard(uid: String) = writeMutex.withLock {
         dao.setActiveCard(uid)
     }
 
-    suspend fun updateCardLabel(uid: String, newLabel: String) {
+    suspend fun updateCardLabel(uid: String, newLabel: String) = writeMutex.withLock {
         val trimmed = newLabel.trim()
         if (trimmed.isNotEmpty()) {
             dao.updateCardLabel(uid, trimmed)
@@ -105,7 +109,7 @@ class CardRepository(
         id: Long,
         customTitle: String?,
         category: TransactionCategory
-    ) {
+    ) = writeMutex.withLock {
         dao.updateTransactionDetails(
             id = id,
             customTitle = customTitle?.trim()?.takeIf { it.isNotEmpty() },
@@ -113,14 +117,7 @@ class CardRepository(
         )
     }
 
-    suspend fun deleteCard(uid: String) {
-        val wasActive = dao.getCardByUid(uid)?.isActive == true
-        dao.deleteCardByUid(uid)
-        if (wasActive) {
-            val nextCandidate = dao.getAllCards().firstOrNull()
-            if (nextCandidate != null) {
-                dao.setActiveCard(nextCandidate.uid)
-            }
-        }
+    suspend fun deleteCard(uid: String) = writeMutex.withLock {
+        dao.deleteCardAndPromoteActive(uid)
     }
 }

@@ -104,8 +104,11 @@ class MainActivity : AppCompatActivity() {
                         HomeScreen(
                             cards = uiState.cards,
                             transactionsByCard = uiState.transactionsByCard,
+                            isCardsLoaded = uiState.isCardsLoaded,
                             onOpenDetail = { uid ->
-                                navController.navigate("details/$uid")
+                                navController.navigate("details/$uid") {
+                                    launchSingleTop = true
+                                }
                             },
                             onOpenScan = {
                                 viewModel.startManualScan()
@@ -134,9 +137,11 @@ class MainActivity : AppCompatActivity() {
                                 onSetActive = viewModel::setActiveCard,
                                 onDeleteCard = viewModel::deleteCard
                             )
-                        } else {
+                        } else if (uiState.isCardsLoaded) {
                             LaunchedEffect(uid) {
-                                navController.popBackStack()
+                                if (navController.currentBackStackEntry?.destination?.route == ROUTE_DETAILS) {
+                                    navController.popBackStack()
+                                }
                             }
                         }
                     }

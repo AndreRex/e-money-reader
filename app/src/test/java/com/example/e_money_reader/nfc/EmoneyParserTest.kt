@@ -56,7 +56,7 @@ class EmoneyParserTest {
             uidHex = "04112233445566",
             responses = mapOf(
                 "9032030000" to hexToBytes(purseData + "9100"),
-                "903B030001000100" to hexToBytes(txRecord + "9100")
+                "903B030000" to hexToBytes(txRecord + "9100")
             )
         )
 
@@ -101,6 +101,25 @@ class EmoneyParserTest {
 
         val result = EmoneyReaderManager.default().readCard(transceiver)
         assertTrue(result is ReadResult.Error)
+    }
+
+    @Test
+    fun returnsBlankCardNumberWhenInfoFailsAndFlagsTransientLogFailure() {
+        val transceiver = FakeTransceiver(
+            uidHex = "04AABBCCDDEE",
+            responses = mapOf(
+                "00A40400080000000000000001" to hexToBytes("9000"),
+                "00B300003F" to hexToBytes("6982"), // Info read failed
+                "00B500000A" to hexToBytes("144402000000000000009000"),
+                "00B7000010" to hexToBytes("6982")  // Transient log read failure
+            )
+        )
+
+        val result = EmoneyReaderManager.default().readCard(transceiver)
+        assertTrue(result is ReadResult.Success)
+        val data = (result as ReadResult.Success).data
+        assertEquals("", data.cardNumber)
+        assertTrue(data.chipLogReadFailed)
     }
 
     companion object {

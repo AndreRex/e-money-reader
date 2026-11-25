@@ -8,6 +8,7 @@ import com.example.e_money_reader.data.local.TransactionEntity
 import com.example.e_money_reader.data.local.TransactionSource
 import com.example.e_money_reader.nfc.ChipTransaction
 import com.example.e_money_reader.nfc.ParsedCardData
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -157,6 +158,53 @@ class CardRepositoryTest {
         assertEquals("UID_A", remainingCards.first().uid)
         assertTrue(remainingCards.first().isActive)
         assertTrue(repository.observeTransactions("UID_B").first().isEmpty())
+    }
+
+    @Test
+    fun preservesExistingCardNumberOnBlankRescanAndSkipsDeltaWhenChipLogReadFailed() = runTest {
+        repository.saveScannedCard(
+            ParsedCardData(
+                uid = "UID_M",
+                cardNumber = "6032982012344821",
+                issuer = CardIssuer.MANDIRI,
+                balance = 100_000L,
+                chipTransactions = listOf(ChipTransaction("M1", -5_000L, 100_000L, 1_000L))
+            ),
+            nowMillis = 1_000L
+        )
+
+        // Rescan where PAN failed ("") and chip log read failed transiently (chipLogReadFailed = true)
+        val updated = repository.saveScannedCard(
+            ParsedCardData(
+                uid = "UID_M",
+                cardNumber = "",
+                issuer = CardIssuer.MANDIRI,
+                balance = 90_000L,
+                chipTransactions = emptyList(),
+                chipLogReadFailed = true
+            ),
+            nowMillis = 2_000L
+        )
+
+        assertEquals("6032982012344821", updated.cardNumber)
+        // Must NOT fabricate a duplicate BALANCE_DELTA when chipLogReadFailed = true
+        assertEquals(1, repository.observeTransactions("UID_M").first().size)
+    }
+
+    @Test
+    fun serializesConcurrentScansWithoutDuplicateBalanceDelta() = runTest {
+        val base = ParsedCardData("UID_CONC", "10987734", CardIssuer.BCA_FLAZZ, 100_000L, emptyList())
+        repository.saveScannedCard(base, nowMillis = 1_000L)
+
+        val dropScan = base.copy(balance = 80_000L)
+        val job1 = async { repository.saveScannedCard(dropScan, nowMillis = 2_001L) }
+        val job2 = async { repository.saveScannedCard(dropScan, nowMillis = 2_005L) }
+        job1.await()
+        job2.await()
+
+        val txs = repository.observeTransactions("UID_CONC").first()
+        assertEquals(1, txs.size)
+        assertEquals(-20_000L, txs.first().amount)
     }
 
     private class InMemoryTapSaldoDao : TapSaldoDao {

@@ -20,22 +20,25 @@ class BniTapCashParser : EmoneyParser {
         if (balance < 0L || balance > MAX_REASONABLE_BALANCE) return null
 
         val cardNumber = payload.copyOfRange(8, 16).toHex()
-        val logs = readCepasTransactions(transceiver)
+        val (logs, logFailed) = readCepasTransactions(transceiver)
 
         return ParsedCardData(
             uid = transceiver.uidHex,
             cardNumber = cardNumber,
             issuer = CardIssuer.BNI_TAPCASH,
             balance = balance,
-            chipTransactions = logs
+            chipTransactions = logs,
+            chipLogReadFailed = logFailed
         )
     }
 
-    private fun readCepasTransactions(transceiver: ApduTransceiver): List<ChipTransaction> {
+    private fun readCepasTransactions(transceiver: ApduTransceiver): Pair<List<ChipTransaction>, Boolean> {
         val logResp = transceiver.transceive(READ_TX_LOG_CMD)
-        if (!logResp.isStatusOk()) return emptyList()
+        if (!logResp.isStatusOk()) {
+            return emptyList<ChipTransaction>() to !logResp.isUnsupportedLogStatus()
+        }
         val payload = logResp.payloadWithoutSw()
-        if (payload.size < 16) return emptyList()
+        if (payload.size < 16) return emptyList<ChipTransaction>() to true
 
         val result = mutableListOf<ChipTransaction>()
         var offset = 0
@@ -54,7 +57,7 @@ class BniTapCashParser : EmoneyParser {
             }
             offset += 16
         }
-        return result
+        return result to false
     }
 
     companion object {
@@ -62,6 +65,6 @@ class BniTapCashParser : EmoneyParser {
         private const val CEPAS_EPOCH_OFFSET_SEC = 788_918_400L // 1995-01-01T00:00:00Z
         private val SELECT_CEPAS_AID = hexToBytes("00A4040008A000000652301001")
         private val READ_PURSE_3_CMD = hexToBytes("9032030000")
-        private val READ_TX_LOG_CMD = hexToBytes("903B030001000100")
+        private val READ_TX_LOG_CMD = hexToBytes("903B030000")
     }
 }

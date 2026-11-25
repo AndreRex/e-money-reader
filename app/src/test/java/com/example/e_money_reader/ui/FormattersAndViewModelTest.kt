@@ -24,6 +24,7 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -104,6 +105,53 @@ class FormattersAndViewModelTest {
         vm.confirmScannedCardAsActive()
         assertTrue(vm.uiState.value.scanState is ScanUiState.Idle)
         assertTrue(vm.uiState.value.cards.first { it.uid == "UID_2" }.isActive)
+    }
+
+    @Test
+    fun blocksScanWhileModalOpenMarksCardsLoadedAndEmitsDistinctConsecutiveErrors() = runTest {
+        val dao = MiniDao()
+        val repo = CardRepository(dao)
+        repo.saveScannedCard(
+            ParsedCardData("UID_1", "603211114821", CardIssuer.MANDIRI, 148_500L, emptyList()),
+            nowMillis = 1_000L
+        )
+        val vm = TapSaldoViewModel(
+            repository = repo,
+            readerManager = EmoneyReaderManager(emptyList()),
+            ioDispatcher = testDispatcher
+        )
+
+        assertTrue(vm.uiState.value.isCardsLoaded)
+
+        // While modal sheet is open, processTransceiver must be ignored
+        vm.openEditCardLabel(vm.uiState.value.cards.first())
+        vm.processTransceiver(
+            object : ApduTransceiver {
+                override val uidHex: String = "BAD_TAG"
+                override fun transceive(command: ByteArray): ByteArray = ByteArray(0)
+            }
+        )
+        assertTrue(vm.uiState.value.scanState is ScanUiState.Idle)
+
+        vm.dismissSheets()
+
+        // Two identical consecutive errors must carry distinct eventIds so auto-scan navigation always triggers
+        vm.processTransceiver(
+            object : ApduTransceiver {
+                override val uidHex: String = "BAD_TAG"
+                override fun transceive(command: ByteArray): ByteArray = ByteArray(0)
+            }
+        )
+        val err1 = vm.uiState.value.scanState as ScanUiState.Error
+
+        vm.processTransceiver(
+            object : ApduTransceiver {
+                override val uidHex: String = "BAD_TAG"
+                override fun transceive(command: ByteArray): ByteArray = ByteArray(0)
+            }
+        )
+        val err2 = vm.uiState.value.scanState as ScanUiState.Error
+        assertNotEquals(err1.eventId, err2.eventId)
     }
 
     private class MiniDao : TapSaldoDao {

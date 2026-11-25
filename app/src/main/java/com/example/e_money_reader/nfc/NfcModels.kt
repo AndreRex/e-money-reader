@@ -14,7 +14,8 @@ data class ParsedCardData(
     val cardNumber: String,
     val issuer: CardIssuer,
     val balance: Long,
-    val chipTransactions: List<ChipTransaction>
+    val chipTransactions: List<ChipTransaction>,
+    val chipLogReadFailed: Boolean = false
 )
 
 sealed interface ReadResult {
@@ -36,6 +37,13 @@ internal fun ByteArray.isStatusOk(): Boolean {
     val sw1 = this[size - 2].toInt() and 0xFF
     val sw2 = this[size - 1].toInt() and 0xFF
     return (sw1 == 0x90 && sw2 == 0x00) || (sw1 == 0x91 && sw2 == 0x00)
+}
+
+internal fun ByteArray.isUnsupportedLogStatus(): Boolean {
+    if (size < 2) return false
+    val sw1 = this[size - 2].toInt() and 0xFF
+    val sw2 = this[size - 1].toInt() and 0xFF
+    return (sw1 == 0x6A && (sw2 == 0x81 || sw2 == 0x82)) || sw1 == 0x6D || sw1 == 0x6E
 }
 
 internal fun ByteArray.payloadWithoutSw(): ByteArray =

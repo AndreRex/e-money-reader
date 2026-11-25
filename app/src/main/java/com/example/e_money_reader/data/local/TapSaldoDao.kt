@@ -49,6 +49,29 @@ interface TapSaldoDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertTransactionsIgnore(transactions: List<TransactionEntity>): List<Long>
 
+    @Transaction
+    suspend fun saveCardWithTransactions(
+        card: CardEntity,
+        newTransactions: List<TransactionEntity>
+    ) {
+        upsertCard(card)
+        if (newTransactions.isNotEmpty()) {
+            insertTransactionsIgnore(newTransactions)
+        }
+    }
+
+    @Transaction
+    suspend fun deleteCardAndPromoteActive(uid: String) {
+        val wasActive = getCardByUid(uid)?.isActive == true
+        deleteCardByUid(uid)
+        if (wasActive) {
+            val nextCandidate = getAllCards().firstOrNull()
+            if (nextCandidate != null) {
+                setActiveCard(nextCandidate.uid)
+            }
+        }
+    }
+
     @Query("UPDATE transactions SET customTitle = :customTitle, category = :category WHERE id = :id")
     suspend fun updateTransactionDetails(
         id: Long,

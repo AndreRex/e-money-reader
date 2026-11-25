@@ -16,7 +16,7 @@ class BcaFlazzParser : EmoneyParser {
         val balance = balPayload.readInt32BE(0).toLong() and 0xFFFFFFFFL
         if (balance > MAX_REASONABLE_BALANCE) return null
 
-        val cardNumber = extractEmvPan(transceiver) ?: transceiver.uidHex
+        val cardNumber = extractEmvPan(transceiver).orEmpty()
 
         return ParsedCardData(
             uid = transceiver.uidHex,

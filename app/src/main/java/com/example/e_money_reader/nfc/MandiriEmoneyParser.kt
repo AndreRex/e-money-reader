@@ -16,15 +16,16 @@ class MandiriEmoneyParser : EmoneyParser {
         val balance = balancePayload.readUInt32LE(0)
         if (balance > MAX_REASONABLE_BALANCE) return null
 
-        val cardNumber = readCardNumber(transceiver) ?: transceiver.uidHex
-        val logs = readChipLogs(transceiver)
+        val cardNumber = readCardNumber(transceiver).orEmpty()
+        val (logs, logFailed) = readChipLogs(transceiver)
 
         return ParsedCardData(
             uid = transceiver.uidHex,
             cardNumber = cardNumber,
             issuer = CardIssuer.MANDIRI,
             balance = balance,
-            chipTransactions = logs
+            chipTransactions = logs,
+            chipLogReadFailed = logFailed
         )
     }
 
@@ -33,15 +34,16 @@ class MandiriEmoneyParser : EmoneyParser {
         if (!infoResp.isStatusOk()) return null
         val payload = infoResp.payloadWithoutSw()
         if (payload.size < 8) return null
-        val candidate = payload.copyOfRange(0, 8).toHex()
-        return candidate.takeIf { it.all(Char::isDigit) } ?: candidate
+        return payload.copyOfRange(0, 8).toHex()
     }
 
-    private fun readChipLogs(transceiver: ApduTransceiver): List<ChipTransaction> {
+    private fun readChipLogs(transceiver: ApduTransceiver): Pair<List<ChipTransaction>, Boolean> {
         val logResp = transceiver.transceive(READ_LOG_CMD)
-        if (!logResp.isStatusOk()) return emptyList()
+        if (!logResp.isStatusOk()) {
+            return emptyList<ChipTransaction>() to !logResp.isUnsupportedLogStatus()
+        }
         val payload = logResp.payloadWithoutSw()
-        if (payload.size < 16) return emptyList()
+        if (payload.size < 16) return emptyList<ChipTransaction>() to true
 
         val result = mutableListOf<ChipTransaction>()
         var offset = 0
@@ -51,7 +53,7 @@ class MandiriEmoneyParser : EmoneyParser {
             val balAfter = payload.readUInt32LE(offset + 5)
             val epochSec = payload.readUInt32LE(offset + 9)
             if (amount != 0L) {
-                val tsMillis = if (epochSec > 946_684_800L) epochSec * 1_000L else System.currentTimeMillis()
+                val tsMillis = if (epochSec > 946_684_800L) epochSec * 1_000L else System.currentTimeMillis() + offset
                 result += ChipTransaction(
                     dedupKey = "MDR-$seq-$amount-$balAfter-$epochSec",
                     amount = amount,
@@ -61,7 +63,7 @@ class MandiriEmoneyParser : EmoneyParser {
             }
             offset += 16
         }
-        return result
+        return result to false
     }
 
     companion object {

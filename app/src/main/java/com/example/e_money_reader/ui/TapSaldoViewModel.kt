@@ -18,6 +18,7 @@ import com.example.e_money_reader.nfc.EmoneyReaderManager
 import com.example.e_money_reader.nfc.IsoDepApduTransceiver
 import com.example.e_money_reader.nfc.ParsedCardData
 import com.example.e_money_reader.nfc.ReadResult
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -29,6 +30,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 
 sealed interface ScanUiState {
@@ -36,14 +38,24 @@ sealed interface ScanUiState {
     data object WaitingForTap : ScanUiState
     data class Success(
         val card: CardEntity,
-        val requiresActiveConfirmation: Boolean
+        val requiresActiveConfirmation: Boolean,
+        val eventId: Long = nextScanEventId()
     ) : ScanUiState
-    data class Error(val message: String) : ScanUiState
+    data class Error(
+        val message: String,
+        val eventId: Long = nextScanEventId()
+    ) : ScanUiState
+
+    companion object {
+        private val eventCounter = AtomicLong(1L)
+        fun nextScanEventId(): Long = eventCounter.getAndIncrement()
+    }
 }
 
 data class TapSaldoUiState(
     val cards: List<CardEntity> = emptyList(),
     val transactionsByCard: Map<String, List<TransactionEntity>> = emptyMap(),
+    val isCardsLoaded: Boolean = false,
     val scanState: ScanUiState = ScanUiState.Idle,
     val editingCardForLabel: CardEntity? = null,
     val editingTransaction: TransactionEntity? = null,
@@ -63,6 +75,7 @@ class TapSaldoViewModel(
 
     private val _uiState = MutableStateFlow(TapSaldoUiState())
     val uiState: StateFlow<TapSaldoUiState> = _uiState.asStateFlow()
+    private val scanMutex = Mutex()
 
     init {
         viewModelScope.launch {
@@ -84,7 +97,11 @@ class TapSaldoViewModel(
                 }
                 .collect { (cards, txMap) ->
                     _uiState.update {
-                        it.copy(cards = cards, transactionsByCard = txMap)
+                        it.copy(
+                            cards = cards,
+                            transactionsByCard = txMap,
+                            isCardsLoaded = true
+                        )
                     }
                 }
         }
@@ -140,38 +157,49 @@ class TapSaldoViewModel(
         transceiver: ApduTransceiver,
         onFinally: () -> Unit = {}
     ) {
+        if (_uiState.value.isModalSheetOpen) {
+            onFinally()
+            return
+        }
+        if (!scanMutex.tryLock()) {
+            onFinally()
+            return
+        }
         viewModelScope.launch {
-            val activeBeforeScan = _uiState.value.cards.firstOrNull { it.isActive }
-            val result = withContext(ioDispatcher) {
-                try {
-                    readerManager.readCard(transceiver)
-                } finally {
-                    onFinally()
-                }
-            }
-            when (result) {
-                is ReadResult.Success -> {
-                    val savedCard = withContext(ioDispatcher) {
-                        repository.saveScannedCard(result.data)
+            try {
+                val result = withContext(ioDispatcher) {
+                    try {
+                        readerManager.readCard(transceiver)
+                    } finally {
+                        onFinally()
                     }
-                    val needsConfirm = activeBeforeScan != null && activeBeforeScan.uid != savedCard.uid
-                    _uiState.update {
-                        it.copy(
-                            scanState = ScanUiState.Success(
-                                card = savedCard,
-                                requiresActiveConfirmation = needsConfirm
+                }
+                when (result) {
+                    is ReadResult.Success -> {
+                        val savedCard = withContext(ioDispatcher) {
+                            repository.saveScannedCard(result.data)
+                        }
+                        _uiState.update {
+                            it.copy(
+                                scanState = ScanUiState.Success(
+                                    card = savedCard,
+                                    requiresActiveConfirmation = !savedCard.isActive
+                                )
                             )
-                        )
+                        }
+                    }
+                    is ReadResult.Error -> {
+                        _uiState.update { it.copy(scanState = ScanUiState.Error(result.message)) }
                     }
                 }
-                is ReadResult.Error -> {
-                    _uiState.update { it.copy(scanState = ScanUiState.Error(result.message)) }
-                }
+            } finally {
+                scanMutex.unlock()
             }
         }
     }
 
     fun simulateDebugScan(issuer: CardIssuer = CardIssuer.MANDIRI) {
+        if (_uiState.value.isModalSheetOpen || !scanMutex.tryLock()) return
         val now = System.currentTimeMillis()
         val sample = when (issuer) {
             CardIssuer.MANDIRI -> ParsedCardData(
@@ -207,11 +235,13 @@ class TapSaldoViewModel(
             )
         }
         viewModelScope.launch {
-            val activeBefore = _uiState.value.cards.firstOrNull { it.isActive }
-            val saved = withContext(ioDispatcher) { repository.saveScannedCard(sample, now) }
-            val needsConfirm = activeBefore != null && activeBefore.uid != saved.uid
-            _uiState.update {
-                it.copy(scanState = ScanUiState.Success(saved, needsConfirm))
+            try {
+                val saved = withContext(ioDispatcher) { repository.saveScannedCard(sample, now) }
+                _uiState.update {
+                    it.copy(scanState = ScanUiState.Success(saved, !saved.isActive))
+                }
+            } finally {
+                scanMutex.unlock()
             }
         }
     }

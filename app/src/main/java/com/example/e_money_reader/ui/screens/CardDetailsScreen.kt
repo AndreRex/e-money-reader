@@ -102,7 +102,6 @@ fun CardDetailsScreen(
                     onClick = {
                         showDeleteDialog = false
                         onDeleteCard(card.uid)
-                        onBack()
                     }
                 ) {
                     Text("Hapus", color = TapAccentRed, fontWeight = FontWeight.Bold)

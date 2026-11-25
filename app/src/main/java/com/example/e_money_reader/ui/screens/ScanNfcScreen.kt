@@ -2,6 +2,7 @@ package com.example.e_money_reader.ui.screens
 
 import android.content.Intent
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -78,6 +79,14 @@ fun ScanNfcScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+
+    BackHandler {
+        if (scanState is ScanUiState.Success) {
+            onKeepCurrentActive()
+        } else {
+            onCancel()
+        }
+    }
 
     Column(
         modifier = modifier
