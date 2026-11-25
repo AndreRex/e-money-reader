@@ -6,9 +6,9 @@ Aplikasi Android pembaca kartu e-money berbasis **NFC (`IsoDep` APDU)** yang **1
 
 ## Tampilan Aplikasi
 
-| Home (Swipeable Card & Bubbles) | Card Details & Tap History | Scan NFC Card |
-| :---: | :---: | :---: |
-| <img src="docs/screenshots/01-home.png" width="240" alt="Home Screen" /> | <img src="docs/screenshots/02-card-details.png" width="240" alt="Card Details Screen" /> | <img src="docs/screenshots/03-scan-nfc.png" width="240" alt="Scan NFC Screen" /> |
+![Tampilan Aplikasi TapSaldo](docs/screenshots/tapsaldo-preview.png)
+
+*Kiri ke kanan: Halaman Utama (Swipeable Card & Bubbles) · Card Details & Tap History · Scan NFC Card*
 
 ---
 
